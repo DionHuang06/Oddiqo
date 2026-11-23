@@ -43,6 +43,8 @@ def main(argv=None) -> int:
         leagues = args.leagues.split(",") if args.leagues else list(settings.enabled_leagues)
         for book in books:
             for league in leagues:
+                if not adapters[book].supports(league):
+                    continue
                 try:
                     games = adapters[book].fetch(league)
                 except FetchError as e:

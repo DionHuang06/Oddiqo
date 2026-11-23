@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from oddsapi.api import create_app
 from oddsapi.auth import RateLimiter, create_key
+from oddsapi.config import BOOKS, Settings
 
 from .conftest import RECORDED_AT
 
@@ -50,7 +51,7 @@ def test_leagues_and_books(client, key):
             {"id": "mlb", "name": "MLB", "sport": "baseball"},
         ]
     }
-    assert [b["id"] for b in client.get("/v1/books", headers=h(key)).json()["data"]] == ["fanduel", "draftkings", "pinnacle"]
+    assert [b["id"] for b in client.get("/v1/books", headers=h(key)).json()["data"]] == list(BOOKS)
 
 
 def test_games_for_a_day(client, key):
@@ -129,12 +130,33 @@ def test_game_without_odds_has_empty_books(client, key, loaded):
 
 
 def test_stale_then_omitted(client, key, loaded, now):
+    # NBA is polled every 30 minutes, so a price goes stale after 45 and is dropped after 75.
+    gid = gsw_game_id(loaded)
+    odds = lambda: client.get(f"/v1/games/{gid}/odds", headers=h(key)).json()["data"]["books"]  # noqa: E731
+    now[0] = RECORDED_AT + timedelta(seconds=300)
+    assert odds()[0]["markets"][0]["stale"] is False
+    now[0] = RECORDED_AT + timedelta(seconds=2701)
+    assert odds()[0]["markets"][0]["stale"] is True
+    now[0] = RECORDED_AT + timedelta(seconds=4501)
+    assert odds() == []
+
+
+def test_ui_is_served_without_data(client):
+    r = client.get("/ui")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "/v1/odds" in r.text and "Bearer" in r.text
+    assert client.get("/", follow_redirects=False).headers["location"] == "/ui"
+
+
+def test_stale_then_omitted_on_fast_schedule(loaded, now):
+    settings = Settings(db_path=":memory:", slate_leagues=())
+    c = TestClient(create_app(settings, loaded, RateLimiter(clock=lambda: now[0].timestamp()), clock=lambda: now[0]))
+    k = create_key(loaded, "fast", "developer", ["odds:read"])
     gid = gsw_game_id(loaded)
     now[0] = RECORDED_AT + timedelta(seconds=300)
-    m = client.get(f"/v1/games/{gid}/odds", headers=h(key)).json()["data"]["books"][0]["markets"][0]
-    assert m["stale"] is True
+    assert c.get(f"/v1/games/{gid}/odds", headers=h(k)).json()["data"]["books"][0]["markets"][0]["stale"] is True
     now[0] = RECORDED_AT + timedelta(seconds=601)
-    assert client.get(f"/v1/games/{gid}/odds", headers=h(key)).json()["data"]["books"] == []
+    assert c.get(f"/v1/games/{gid}/odds", headers=h(k)).json()["data"]["books"] == []
 
 
 def test_board(client, key):

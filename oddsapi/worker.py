@@ -2,6 +2,10 @@
 
     python -m oddsapi.worker            # run forever
     python -m oddsapi.worker --once     # schedule + scores + one odds poll per book/league, then exit
+
+Leagues in ODDSAPI_SLATE_LEAGUES (default nba) run on the day-slate schedule: today's
+ET games are reloaded every ODDSAPI_SLATE_REFRESH_SECONDS (1800) and each book's odds
+are polled every ODDSAPI_NBA_ODDS_POLL_SECONDS (1800) while any of them is pregame.
 """
 
 import argparse
@@ -90,6 +94,27 @@ class Worker:
             ).fetchone()
         )
 
+    def slate_window(self, now: datetime) -> tuple[datetime, datetime]:
+        """Today in ET (plus slate_days - 1 more days), as a UTC window."""
+        today = now.astimezone(ET).date()
+        start = datetime.combine(today, datetime.min.time(), ET)
+        return start, start + timedelta(days=max(1, self.settings.slate_days))
+
+    def run_slate(self, league: str, now: datetime):
+        start, end = self.slate_window(now)
+        first, last = start.date(), (end - timedelta(days=1)).date()
+        return self._run(f"slate:{league}", lambda: upsert_score_games(self.conn, self.scores.fetch(league, first, last)))
+
+    def slate_pregame(self, league: str, now: datetime) -> list[str]:
+        """Ids of slate games that have not started; odds are polled only while this is non-empty."""
+        start, end = self.slate_window(now)
+        rows = self.conn.execute(
+            """SELECT id FROM games WHERE league_id = ? AND status = 'scheduled'
+               AND starts_at >= ? AND starts_at < ? AND starts_at > ? ORDER BY starts_at""",
+            (league, iso(start), iso(end), iso(now)),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
     def run_odds(self, book: str, league: str):
         adapter = self.adapters[book]
 
@@ -112,11 +137,16 @@ class Worker:
             interval = self.score_interval(league, now)
             if interval and self._due(f"scores:{league}", interval, now_ts):
                 self.run_scores(league)
-            if not self.league_has_upcoming(league, now):
+            if league in self.settings.slate_leagues:
+                if self._due(f"slate:{league}", self.settings.slate_refresh_seconds, now_ts):
+                    self.run_slate(league, now)
+                if not self.slate_pregame(league, now):
+                    continue
+            elif not self.league_has_upcoming(league, now):
                 continue
             for book, adapter in self.adapters.items():
                 if getattr(adapter, "supports", lambda _l: True)(league) and self._due(
-                    f"odds:{book}:{league}", self.settings.effective_odds_poll_seconds, now_ts
+                    f"odds:{book}:{league}", self.settings.odds_poll_for(league), now_ts
                 ):
                     self.run_odds(book, league)
 

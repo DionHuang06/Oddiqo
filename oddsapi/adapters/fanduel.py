@@ -24,7 +24,9 @@ class FanDuelAdapter(ScrapingAdapter):
     league_ids = {"nba": "nba", "nfl": "nfl", "mlb": "mlb"}
 
     def url(self) -> str:
-        return f"https://sbapi.{self.settings.fanduel_state}.sportsbook.fanduel.com/api/content-managed-page"
+        state = self.settings.fanduel_state
+        tld = "ca" if state == "on" else "com"
+        return f"https://sbapi.{state}.sportsbook.fanduel.{tld}/api/content-managed-page"
 
     def fetch_raw(self, league: str) -> dict:
         return self.client.get_json(

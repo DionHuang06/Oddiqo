@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBA odds board</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #161d24; --panel2: #1c252e; --line: #2a3540; --text: #e6edf3;
+    --muted: #8b98a5; --best: #1f6f43; --best-text: #d7ffe6; --accent: #4ea1ff; --warn: #d29922; --live: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(15,20,25,.96); border-bottom: 1px solid var(--line);
+           padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  button, input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; margin-left: auto; }
+  .meta b { color: var(--text); font-weight: 600; }
+  main { padding: 16px 20px 40px; display: grid; gap: 16px; }
+  .game { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .ghead { display: flex; gap: 12px; align-items: baseline; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+  .ghead .teams { font-weight: 650; font-size: 15px; }
+  .ghead .when { color: var(--muted); }
+  .pill { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.live { color: var(--live); border-color: var(--live); }
+  .pill.scheduled { color: var(--accent); border-color: var(--accent); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 1100px; }
+  th, td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-weight: 600; font-size: 12px; color: var(--muted); }
+  th.book { color: var(--text); }
+  th.book small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  th.book .x { color: var(--warn); font-size: 10px; font-weight: 500; }
+  td.row { text-align: left; color: var(--muted); font-size: 12px; min-width: 150px; }
+  td.row b { color: var(--text); font-weight: 600; }
+  tr.sep td { border-top: 2px solid var(--line); }
+  td.cell { font-variant-numeric: tabular-nums; }
+  td.cell .ln { color: var(--muted); margin-right: 4px; }
+  td.cell.best { background: var(--best); color: var(--best-text); font-weight: 650; }
+  td.cell.best .ln { color: var(--best-text); }
+  td.cell.stale { opacity: .45; }
+  td.none { color: #3d4a56; }
+  td.bestcol { border-left: 1px solid var(--line); text-align: left; font-size: 12px; }
+  td.bestcol b { color: var(--best-text); }
+  .empty, .error { padding: 30px; text-align: center; color: var(--muted); background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; }
+  .error { color: #ffb4ad; border-color: #6e2b26; }
+  .keyform { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+  .keyform input { width: 360px; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 20px 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NBA pregame odds</h1>
+  <div class="controls">
+    <button id="today">Today</button>
+    <button id="tomorrow">Tomorrow</button>
+    <input type="date" id="day" aria-label="Date (ET)">
+  </div>
+  <div class="meta">
+    <span>Odds last updated: <b id="updated">–</b></span>
+    <span>Page refreshed: <b id="refreshed">–</b> <span id="countdown"></span></span>
+  </div>
+</header>
+<main id="board"><div class="empty">Loading…</div></main>
+<footer>
+  Best available price per row is highlighted (line first, then price); stale prices are dimmed and excluded.
+  Exchange prices (Kalshi, Polymarket, Matchbook, Smarkets) are converted from the best ask/back price and exclude commission or fees.
+  Times are US Eastern. Scraped odds are for this prototype only; see the README before redistributing.
+</footer>
+<script>
+const ET = "America/New_York";
+const params = new URLSearchParams(location.search);
+const REFRESH = Math.max(15, Number(params.get("refresh")) || 60);
+const EXCHANGES = new Set(["kalshi", "polymarket", "matchbook", "smarkets"]);
+let key = null, books = [], timer = null, nextAt = 0;
+
+(function takeKey() {
+  const m = location.hash.match(/key=([^&]+)/);
+  if (m) { localStorage.setItem("oddsapi_key", decodeURIComponent(m[1])); history.replaceState(null, "", location.pathname + location.search); }
+  key = localStorage.getItem("oddsapi_key");
+})();
+
+const etDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: ET, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const etTime = (iso) => new Date(iso).toLocaleTimeString("en-US", { timeZone: ET, hour: "numeric", minute: "2-digit" });
+const etStamp = (iso) => new Date(iso).toLocaleString("en-US", { timeZone: ET, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }) + " ET";
+const fmtPrice = (p) => (p > 0 ? "+" : "") + p;
+const fmtLine = (l) => (l > 0 ? "+" : "") + l;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const dayInput = document.getElementById("day");
+dayInput.value = params.get("on") || etDate(new Date());
+document.getElementById("today").onclick = () => setDay(etDate(new Date()));
+document.getElementById("tomorrow").onclick = () => setDay(etDate(new Date(Date.now() + 864e5)));
+dayInput.onchange = () => setDay(dayInput.value);
+
+function setDay(d) {
+  dayInput.value = d;
+  const p = new URLSearchParams(location.search); p.set("on", d);
+  history.replaceState(null, "", location.pathname + "?" + p.toString());
+  load();
+}
+
+async function api(path) {
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + key } });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error((body.error && body.error.message) || r.statusText), { status: r.status });
+  return body;
+}
+
+function keyForm(msg) {
+  document.getElementById("board").innerHTML =
+    `<div class="empty">${esc(msg)}<form class="keyform" id="kf"><input id="k" placeholder="API key with odds:read and scores:read" autocomplete="off"><button>Use key</button></form></div>`;
+  document.getElementById("kf").onsubmit = (e) => { e.preventDefault(); key = document.getElementById("k").value.trim(); localStorage.setItem("oddsapi_key", key); load(); };
+}
+
+function rowsFor(g) {
+  const a = g.away.short_name, h = g.home.short_name;
+  return [
+    { label: `<b>${esc(a)}</b> moneyline`, market: "moneyline", side: g.away.id },
+    { label: `<b>${esc(h)}</b> moneyline`, market: "moneyline", side: g.home.id },
+    { label: `<b>${esc(a)}</b> spread`, market: "spread", side: g.away.id, sep: true },
+    { label: `<b>${esc(h)}</b> spread`, market: "spread", side: g.home.id },
+    { label: "<b>Over</b> total", market: "total", side: "over", sep: true },
+    { label: "<b>Under</b> total", market: "total", side: "under" },
+  ];
+}
+
+// Higher is better for the bettor: more points on a spread, a lower over / higher under, then a longer price.
+function score(row, c) {
+  const lineScore = row.market === "spread" ? c.line : row.side === "over" ? -c.line : row.side === "under" ? c.line : 0;
+  return [lineScore, Number(c.price_decimal)];
+}
+const cmp = (x, y) => (x[0] - y[0]) || (x[1] - y[1]);
+
+function renderGame(g) {
+  const byBook = {};
+  for (const b of g.books) for (const m of b.markets) byBook[b.id + ":" + m.id] = m;
+  const latest = {};
+  for (const b of g.books) latest[b.id] = b.markets.map((m) => m.captured_at).sort().at(-1);
+
+  let head = `<tr><th></th>`;
+  for (const b of books) {
+    head += `<th class="book">${esc(b.name)}${EXCHANGES.has(b.id) ? ' <span class="x">exch</span>' : ""}<small>${latest[b.id] ? etTime(latest[b.id]) : "no odds"}</small></th>`;
+  }
+  head += `<th>Best</th></tr>`;
+
+  let body = "";
+  for (const row of rowsFor(g)) {
+    const cells = books.map((b) => {
+      const m = byBook[b.id + ":" + row.market];
+      const o = m && m.outcomes.find((x) => x.side === row.side);
+      return o ? { book: b, stale: m.stale, captured_at: m.captured_at, ...o } : null;
+    });
+    let best = null;
+    for (const c of cells) if (c && !c.stale && (!best || cmp(score(row, c), best) > 0)) best = score(row, c);
+    const bestBooks = [];
+    body += `<tr class="${row.sep ? "sep" : ""}"><td class="row">${row.label}</td>`;
+    for (const c of cells) {
+      if (!c) { body += `<td class="none">–</td>`; continue; }
+      const isBest = best && !c.stale && cmp(score(row, c), best) === 0;
+      if (isBest) bestBooks.push(c);
+      const line = row.market === "moneyline" ? "" : `<span class="ln">${row.market === "total" ? c.line : fmtLine(c.line)}</span>`;
+      body += `<td class="cell${isBest ? " best" : ""}${c.stale ? " stale" : ""}" title="${esc(c.book.name)} · captured ${etStamp(c.captured_at)}${c.stale ? " (stale)" : ""}">${line}${fmtPrice(c.price_american)}</td>`;
+    }
+    const b0 = bestBooks[0];
+    body += `<td class="bestcol">${b0 ? `<b>${row.market === "moneyline" ? "" : (row.market === "total" ? b0.line : fmtLine(b0.line)) + " "}${fmtPrice(b0.price_american)}</b> ${esc(bestBooks.map((c) => c.book.name).join(", "))}` : "–"}</td></tr>`;
+  }
+
+  const status = g.status;
+  const score_ = g.score ? ` · ${g.away.short_name} ${g.score.away} – ${g.score.home} ${g.home.short_name}` : "";
+  return `<section class="game"><div class="ghead"><span class="teams">${esc(g.away.name)} @ ${esc(g.home.name)}</span>
+    <span class="when">${etTime(g.starts_at)} ET${esc(score_)}</span><span class="pill ${status}">${status === "scheduled" ? "pregame" : status}</span></div>
+    <div class="scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div></section>`;
+}
+
+async function load() {
+  clearTimeout(timer);
+  if (!key) return keyForm("Enter an API key to load the board (it stays in this browser).");
+  const on = dayInput.value;
+  try {
+    if (!books.length) books = (await api("/v1/books")).data;
+    const [odds, games] = await Promise.all([
+      api(`/v1/odds?league=nba&on=${on}&time_zone=${encodeURIComponent(ET)}`),
+      api(`/v1/games?league=nba&on=${on}&time_zone=${encodeURIComponent(ET)}`).catch(() => ({ data: [] })),
+    ]);
+    const scores = Object.fromEntries(games.data.map((g) => [g.id, g.score]));
+    const data = odds.data.map((g) => ({ ...g, score: scores[g.id] || null }));
+    const order = { scheduled: 0, live: 1, final: 2 };
+    data.sort((x, y) => (order[x.status] ?? 3) - (order[y.status] ?? 3) || x.starts_at.localeCompare(y.starts_at));
+    const stamps = data.flatMap((g) => g.books.flatMap((b) => b.markets.map((m) => m.captured_at))).sort();
+    document.getElementById("updated").textContent = stamps.length ? etStamp(stamps.at(-1)) : "no odds stored for this day";
+    document.getElementById("board").innerHTML = data.length
+      ? data.map(renderGame).join("")
+      : `<div class="empty">No NBA games on ${esc(on)}.</div>`;
+  } catch (e) {
+    if (e.status === 401) { localStorage.removeItem("oddsapi_key"); key = null; return keyForm("That API key was refused. Enter another."); }
+    document.getElementById("board").innerHTML = `<div class="error">Could not load odds: ${esc(e.message)}</div>`;
+  }
+  document.getElementById("refreshed").textContent = new Date().toLocaleTimeString("en-US", { timeZone: ET }) + " ET";
+  nextAt = Date.now() + REFRESH * 1000;
+  timer = setTimeout(load, REFRESH * 1000);
+}
+
+setInterval(() => {
+  const s = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
+  document.getElementById("countdown").textContent = nextAt ? `(next in ${s}s)` : "";
+}, 1000);
+load();
+</script>
+</body>
+</html>

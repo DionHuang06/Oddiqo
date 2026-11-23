@@ -3,16 +3,19 @@
 import json
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import ApiKey, RateLimiter, lookup_key
 from .config import BOOKS, LEAGUES, MARKETS, Settings, get_settings
 from .db import connect, from_iso, init_db, utcnow
+
+STATIC = Path(__file__).parent / "static"
 
 GAME_STATUSES = ("scheduled", "live", "final", "postponed", "canceled")
 SPORTS = {"nba": "basketball", "nfl": "american_football", "mlb": "baseball"}
@@ -149,10 +152,11 @@ def create_app(settings: Settings | None = None, conn: sqlite3.Connection | None
             ids + books + markets,
         ).fetchall()
         now = clock()
+        league_of = {g["id"]: g["league_id"] for g in games}
         grouped: dict[tuple, list] = {}
         for r in rows:
             age = (now - from_iso(r["captured_at"])).total_seconds()
-            if age > settings.odds_max_age_seconds:
+            if age > settings.odds_max_age_for(league_of[r["game_id"]]):
                 continue
             grouped.setdefault((r["game_id"], r["book_id"], r["market"]), []).append((r, age))
         for gid in ids:
@@ -179,7 +183,7 @@ def create_app(settings: Settings | None = None, conn: sqlite3.Connection | None
                         "id": market,
                         "outcomes": outcomes,
                         "captured_at": min(r["captured_at"] for r, _ in items),
-                        "stale": max(a for _, a in items) > settings.odds_stale_seconds,
+                        "stale": max(a for _, a in items) > settings.odds_stale_for(league_of[gid]),
                     })
                 if mlist:
                     out[gid].append({"id": book, "markets": mlist})
@@ -204,6 +208,16 @@ def create_app(settings: Settings | None = None, conn: sqlite3.Connection | None
     @app.get("/healthz", include_in_schema=False)
     def healthz():
         return {"ok": True}
+
+    # The UI is a static page; it reads /v1/odds with the visitor's own API key, so it
+    # gets no data the API would not already serve that key.
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse("/ui")
+
+    @app.get("/ui", include_in_schema=False)
+    def ui():
+        return FileResponse(STATIC / "index.html", media_type="text/html")
 
     @app.get("/v1/leagues")
     def leagues(key: ApiKey = Depends(require(None))):

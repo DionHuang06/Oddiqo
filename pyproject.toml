@@ -1,7 +1,7 @@
 [project]
 name = "sportsbook-odds-api"
 version = "0.1.0"
-description = "Prototype: NBA/NFL/MLB scores plus FanDuel, DraftKings and Pinnacle pregame odds behind a small read API"
+description = "Prototype: NBA/NFL/MLB scores plus pregame odds from ten sportsbooks and exchanges behind a small read API and web UI"
 requires-python = ">=3.11"
 dependencies = ["fastapi==0.165.0", "uvicorn==0.54.0", "httpx==0.28.1"]
 
@@ -10,6 +10,9 @@ dev = ["pytest==9.2.0"]
 
 [tool.setuptools]
 packages = ["oddsapi", "oddsapi.adapters", "oddsapi.scores"]
+
+[tool.setuptools.package-data]
+oddsapi = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

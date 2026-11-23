@@ -81,6 +81,7 @@ class NoScores:
 
 
 def make_worker(conn, adapters, now, **settings_kw):
+    settings_kw.setdefault("slate_leagues", ())  # generic cadence; the NBA slate scheduler is tested in test_slate.py
     settings = Settings(db_path=":memory:", enabled_leagues=("nba", "nfl", "mlb"), **settings_kw)
     clock = [now.timestamp()]
     w = Worker(settings, conn, adapters, NoScores(), clock=lambda: clock[0])

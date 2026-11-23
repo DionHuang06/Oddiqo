@@ -43,5 +43,10 @@ class ScrapingAdapter(OddsAdapter):
         return self.parse(league, raw, datetime.now(timezone.utc))
 
 
+# Exchanges: drop a market when backing both sides costs more than this per $1 payout.
+# Thin books (bid 1c / ask 99c) otherwise look "balanced" at a 50c midpoint.
+MAX_EXCHANGE_OVERROUND = 1.15
+
+
 def parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)

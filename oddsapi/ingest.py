@@ -4,11 +4,14 @@ import json
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from .db import from_iso, iso, utcnow
 from .models import BookGame, ScoreGame, ScoreTeam
 from .odds_math import american_to_decimal
+
+ET = ZoneInfo("America/New_York")
 
 # Book spellings that the suffix rule in resolve_team cannot reach.
 EXTRA_ALIASES = {
@@ -104,11 +107,16 @@ def match_game(conn: sqlite3.Connection, book: str, source: str, bg: BookGame, t
     away = resolve_team(conn, bg.league, bg.away_name)
     if not home or not away:
         return None
-    tol = timedelta(minutes=tolerance_minutes)
+    if bg.date_only:
+        lo = datetime.combine(bg.starts_at.astimezone(ET).date(), time.min, ET)
+        hi = lo + timedelta(days=1) - timedelta(seconds=1)
+    else:
+        tol = timedelta(minutes=tolerance_minutes)
+        lo, hi = bg.starts_at - tol, bg.starts_at + tol
     candidates = conn.execute(
         """SELECT id, starts_at FROM games WHERE league_id = ? AND home_team_id = ? AND away_team_id = ?
            AND starts_at BETWEEN ? AND ?""",
-        (bg.league, home, away, iso(bg.starts_at - tol), iso(bg.starts_at + tol)),
+        (bg.league, home, away, iso(lo), iso(hi)),
     ).fetchall()
     if not candidates:
         return None
@@ -130,8 +138,11 @@ def ingest_book_games(
         if not game_id:
             stats["unmatched"].append(f"{bg.away_name} @ {bg.home_name} {iso(bg.starts_at)}")
             continue
+        teams = conn.execute("SELECT home_team_id, away_team_id, starts_at, status FROM games WHERE id = ?", (game_id,)).fetchone()
+        if bg.date_only and (teams["status"] != "scheduled" or from_iso(teams["starts_at"]) <= (bg.captured_at or now or utcnow())):
+            # Exchange markets stay open in-play and carry no start time; keep pregame only.
+            continue
         stats["matched"] += 1
-        teams = conn.execute("SELECT home_team_id, away_team_id FROM games WHERE id = ?", (game_id,)).fetchone()
         side_ids = {"home": teams["home_team_id"], "away": teams["away_team_id"], "over": "over", "under": "under"}
         captured = iso(bg.captured_at) if bg.captured_at else observed
 

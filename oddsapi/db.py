@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime, timezone
 
+from .config import BOOK_NAMES, BOOKS
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leagues (
     id TEXT PRIMARY KEY,
@@ -115,7 +117,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 """
 
 LEAGUE_ROWS = [("nba", "NBA", "basketball"), ("nfl", "NFL", "american_football"), ("mlb", "MLB", "baseball")]
-BOOK_ROWS = [("fanduel", "FanDuel"), ("draftkings", "DraftKings"), ("pinnacle", "Pinnacle")]
+BOOK_ROWS = [(b, BOOK_NAMES[b]) for b in BOOKS]
 
 
 def utcnow() -> datetime:

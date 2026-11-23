@@ -26,6 +26,8 @@ class BookGame:
     away_name: str
     markets: list[BookMarket] = field(default_factory=list)
     captured_at: datetime | None = None
+    # Sources that list only a game date (Kalshi tickers) match on teams + ET date.
+    date_only: bool = False
 
 
 @dataclass

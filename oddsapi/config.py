@@ -2,7 +2,30 @@ import os
 from dataclasses import dataclass, field
 
 LEAGUES = ("nba", "nfl", "mlb")
-BOOKS = ("fanduel", "draftkings", "pinnacle")
+BOOKS = (
+    "fanduel",
+    "draftkings",
+    "pinnacle",
+    "betrivers",
+    "unibet",
+    "bovada",
+    "matchbook",
+    "smarkets",
+    "kalshi",
+    "polymarket",
+)
+BOOK_NAMES = {
+    "fanduel": "FanDuel",
+    "draftkings": "DraftKings",
+    "pinnacle": "Pinnacle",
+    "betrivers": "BetRivers",
+    "unibet": "Unibet",
+    "bovada": "Bovada",
+    "matchbook": "Matchbook",
+    "smarkets": "Smarkets",
+    "kalshi": "Kalshi",
+    "polymarket": "Polymarket",
+}
 MARKETS = ("moneyline", "spread", "total")
 
 MIN_ODDS_POLL_SECONDS = 60
@@ -58,12 +81,39 @@ class Settings:
     # Public application key that sportsbook.fanduel.com's own pages send to its content API.
     fanduel_app_key: str = field(default_factory=lambda: os.environ.get("ODDSAPI_FANDUEL_AK", "FhMFpcPWXMeyZxOx"))
     draftkings_site: str = field(default_factory=lambda: os.environ.get("ODDSAPI_DRAFTKINGS_SITE", "dkusnj"))
+    # Ontario: ODDSAPI_BETRIVERS_HOST=on.betrivers.ca ODDSAPI_BETRIVERS_CAGE=249
+    betrivers_host: str = field(default_factory=lambda: os.environ.get("ODDSAPI_BETRIVERS_HOST", "nj.betrivers.com"))
+    betrivers_cage: str = field(default_factory=lambda: os.environ.get("ODDSAPI_BETRIVERS_CAGE", "2"))
+    # Kambi offering code and market for Unibet: "ubca"/"CA" is the Canadian (Ontario) site.
+    kambi_offering: str = field(default_factory=lambda: os.environ.get("ODDSAPI_KAMBI_OFFERING", "ubca"))
+    kambi_market: str = field(default_factory=lambda: os.environ.get("ODDSAPI_KAMBI_MARKET", "CA"))
+
+    # NBA day-slate scheduler: every slate_refresh_seconds, reload today's (ET) NBA games
+    # from ESPN; poll each book's NBA odds every nba_odds_poll_seconds while any of
+    # those games is still pregame. slate_days=2 also covers tomorrow.
+    slate_refresh_seconds: int = field(default_factory=lambda: _env_int("ODDSAPI_SLATE_REFRESH_SECONDS", 1800))
+    nba_odds_poll_seconds: int = field(default_factory=lambda: _env_int("ODDSAPI_NBA_ODDS_POLL_SECONDS", 1800))
+    slate_days: int = field(default_factory=lambda: _env_int("ODDSAPI_SLATE_DAYS", 1))
+    slate_leagues: tuple[str, ...] = field(default_factory=lambda: _env_list("ODDSAPI_SLATE_LEAGUES", "nba"))
 
     @property
     def effective_odds_poll_seconds(self) -> int:
-        if self.allow_fast_poll:
-            return self.odds_poll_seconds
-        return max(self.odds_poll_seconds, MIN_ODDS_POLL_SECONDS)
+        return self._floor(self.odds_poll_seconds)
+
+    def _floor(self, seconds: int) -> int:
+        return seconds if self.allow_fast_poll else max(seconds, MIN_ODDS_POLL_SECONDS)
+
+    def odds_poll_for(self, league: str) -> int:
+        if league in self.slate_leagues:
+            return self._floor(self.nba_odds_poll_seconds)
+        return self.effective_odds_poll_seconds
+
+    def odds_stale_for(self, league: str) -> int:
+        """A price is stale once it misses about one poll, so slow schedules aren't flagged early."""
+        return max(self.odds_stale_seconds, int(self.odds_poll_for(league) * 1.5))
+
+    def odds_max_age_for(self, league: str) -> int:
+        return max(self.odds_max_age_seconds, int(self.odds_poll_for(league) * 2.5))
 
 
 def get_settings() -> Settings:
