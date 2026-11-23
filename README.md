@@ -1,4 +1,4 @@
-# sportsbook-odds-api (prototype)
+# Oddiqo (prototype)
 
 A small read API and web board for **NBA, NFL and MLB** schedules, live scores and
 **pregame odds** (moneyline, spread / run line, total). FanDuel, DraftKings and Pinnacle
